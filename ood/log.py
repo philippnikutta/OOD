@@ -1,6 +1,6 @@
 import logging
 
-logger = logging.getLogger('par')
+logger = logging.getLogger('oodd')
 logger.setLevel(logging.INFO)
 
 formatter = logging.Formatter('%(asctime)-19.19s %(levelname)-1.1s %(filename)s:%(lineno)s] %(message)s')
