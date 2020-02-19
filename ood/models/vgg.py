@@ -2,8 +2,8 @@ import torch
 import torchvision
 
 
-def get_model(**kwargs_):
-    model = torchvision.models.vgg16_bn(pretrained=False,**kwargs_)
+def get_model(pretrained=False, **kwargs_):
+    model = torchvision.models.vgg16_bn(**kwargs_)
 
 
     #download_url = 'https://download.pytorch.org/models/vgg16_bn-6c64b313.pth'
