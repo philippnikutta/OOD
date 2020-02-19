@@ -259,7 +259,7 @@ class Main(object):
                     ae_inputs = torch.tensor(ae_inputs).to(device)
                     ae_inputs.double()
                     output = model_2(ae_inputs)
-                    loss = criterion(output, ae_inputs)
+                    loss = criterion(output, ae_inputs.view(-1,4224))
                     optimizer.zero_grad()
                     loss.backward()
                     optimizer.step()
