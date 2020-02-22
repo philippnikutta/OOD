@@ -9,6 +9,8 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
+from torch.utils.tensorboard import SummaryWriter
+
 from scipy.stats import moment
 from time import strftime
 from glob import glob
@@ -30,6 +32,8 @@ class Main(object):
         self.timestamp = strftime('%Y-%m-%d-%H.%M.%S')
         for k, v in args.__dict__.items():
             setattr(self, k, v)
+        
+        self.writer = SummaryWriter(log_dir=self.log_dir)
 
         self.runs = sorted(glob(join(self.runs_dir,'*/')))
         if self.continue_run =='last' and len(self.runs) != 0:
@@ -118,10 +122,10 @@ class Main(object):
     
     
 
-    def _calc_statistics(self, hook_dict):
+    def _calc_statistics(self, hook_dict, current_batch_size):
         statistics={}
         num_features = 5
-        stats= np.empty((num_features, self.batch_size,1))
+        stats= np.empty((num_features, current_batch_size, 1))
         for layer_id, layer_hook in hook_dict.items():
             # [N,C,H,W]
             initial_shape=layer_hook.features.shape
@@ -162,7 +166,7 @@ class Main(object):
         val_accuracy_best = 0.0
         model.train()
         for epoch in range(self.initial_epoch, self.initial_epoch+self.epochs):
-            batch_logger = BatchLogger(self.initial_epoch+self.epochs, np.ceil(data.train_set_size/self.batch_size) )
+            batch_logger = BatchLogger(self.initial_epoch+self.epochs, np.ceil(data.train_set_size/self.batch_size), self.writer )
             #batch loop
             running_loss_train = 0.0
             total_train =0
@@ -208,12 +212,10 @@ class Main(object):
             torch.save(model.state_dict(), path_val_accuracy_model)
             epoch_results = (val_loss.cpu().numpy(),val_accuracy_current)
             self._write_epoch_results(epoch_results, mode='training', epoch=epoch)
+            batch_logger.log_epoch(epoch, i, epoch_results[0], epoch_results[1])
 
 
-
-
-
-    def _train_2nd(self, model_1=None, model_2=None, data = None):
+    def _train_2nd(self, model_1=None, model_2=None, data=None):
         self._setup_run()
         device=torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -221,18 +223,21 @@ class Main(object):
             model_1 = vgg.get_model(pretrained=True, **self.vgg_kwargs)
         model_1.to(device)
         model_1.eval()
-        logger.info(summary(model_1,(3,32,32)))
+        logger.info(summary(model_1, (3, 32, 32)))
 
-        
         if model_2 == None:
             model_2 = AutoEncoder(input_dim=200)
         model_2.train()
         model_2.to(device)
         model_2.double()
+        
+        
         criterion = nn.MSELoss()
         optimizer = torch.optim.Adam(
             model_2.parameters(), lr=self.learning_rate, weight_decay=1e-5)
 
+
+        batch_logger = BatchLogger(self.initial_epoch+self.epochs, np.ceil(data.train_set_size/self.batch_size), self.writer )
 
         #register hooks
         feature_modules = list(model_1.children())[0]
@@ -241,8 +246,6 @@ class Main(object):
             if str(module)[:5] == 'Batch':
                 activations[name] = SaveFeatures(module,device)
         
-        
-        
         #foward pass through first network
         #TODO set batch size to one
         logger.info('Training second model')
@@ -250,11 +253,13 @@ class Main(object):
             for batch, train_data in enumerate(data.train_loader,0):
                 inputs, labels = train_data[0].to(device), train_data[1].to(device)
                 outputs = model_1(inputs)
-                ae_inputs = self._calc_statistics(activations)
+                ae_inputs = self._calc_statistics(activations, current_batch_size=outputs.shape[0])
 
                 
-
-                inner_epochs = 1   
+                total_train=0
+                correct_train=0
+                inner_epochs = 1
+                model_2.train()
                 for epoch_inner in range(inner_epochs):
                     ae_inputs = torch.tensor(ae_inputs).to(device)
                     ae_inputs.double()
@@ -263,12 +268,25 @@ class Main(object):
                     optimizer.zero_grad()
                     loss.backward()
                     optimizer.step()
-                    
-                    
-                    logger.info('Epoch: {:<2}/{:>2}    [Batch: {:>5}/{:>8.0f}]  Loss: {:>2.4f}'.format(
-                            epoch+1, self.epochs, batch+1, np.ceil(data.train_set_size/self.batch_size), loss.item()                                 
-                                ))
+                    #accuracy
+                    _, predicted = torch.max(outputs.data, 1)
+                    total_train += labels.size(0)
+                    correct_train += (predicted==labels).sum().item()
+                    train_accuracy = 100 * correct_train / total_train
+                    batch_logger.log(epoch, batch, loss.item(), train_accuracy)
+                    #logger.info('Epoch: {:<2}/{:>2}    [Batch: {:>5}/{:>8.0f}]  Loss: {:>2.4f}'.format(
+                    #        epoch+1, self.epochs, batch+1, np.ceil(data.train_set_size/self.batch_size), loss.item()                                 
+                    #            ))
                 del ae_inputs
+            model_2.eval()
+            logger.info('Validating 2nd model on val set + uniform noise')
+            for batch, val_data in enumerate(data.shifted_val_loader):
+                    
+                    
+
+
+
+
 
             activations.close()
 
@@ -289,8 +307,6 @@ class Main(object):
         self._train(data, model)
 
     def train_ae(self):
-        #TODO: load model
-
         model_1 = vgg.get_model(**self.vgg_kwargs)
         model_1.load_state_dict(torch.load(self.model_path))
         model_2 = AutoEncoder(input_dim=4224)
@@ -308,11 +324,13 @@ def main():
 
     parser.add_argument('--runs_dir', default='runs', help='Directory to save runs to')
     parser.add_argument('--data-dir', default='D:/Philipp/CIFAR/par/par/datasets', help='Directory of the data')
+    parser.add_argument('--log-dir', default='logs', help='Log directory for tensorboard')
+
 
     parser.add_argument('-e','--epochs', default=1, type =int, help='Epochs to run')
     parser.add_argument('-b','--batch-size',default=64, type=int, help='Batchsize')
     parser.add_argument('-lr','--learning-rate',default=0.01, type=float, help='Learning rate')
-    parser.add_argument('--model-path',default='', help=f'Path to model weights')
+    parser.add_argument('--model-path',default='runs\\2020-02-19-16.10.43train\\best_val_acc.pth', help=f'Path to model weights')
     parser.add_argument('--test-run', default='last', help='which run to test. '
                       f'If none provided, uses the most recent')
     parser.add_argument('--continue-run',  nargs='?', default='', const='last',
