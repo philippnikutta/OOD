@@ -10,17 +10,17 @@ class BatchLogger(object):
       
     def log(self, current_epoch, current_batch, loss, accuracy, write_to_tensorboard=False):
         if accuracy:
-            
-            #self.writer.add_scalar(tag='Loss/Training', scalar_value=loss, global_step=current_batch)
-            #self.writer.add_scalar(tag='Accuracy/Training', scalar_value=accuracy, global_step=current_epoch)
+            if write_to_tensorboard:
+                self.writer.add_scalar(tag='Loss/Training', scalar_value=loss, global_step=current_batch)
+                self.writer.add_scalar(tag='Accuracy/Training', scalar_value=accuracy, global_step=current_epoch)
             logger.info('Epoch: {:<2}/{:>2}    [Batch: {:>5}/{:>6.0f}]  Loss: {:>2.3f}    Accuracy: {:>2.2f}'.format(
                         current_epoch, self.total_epochs, current_batch, self.total_batches, loss, accuracy                                 
                             ))
             
         else:
-    
-            #self.writer.add_scalar(tag='Loss/Training', scalar_value=loss, global_step=current_epoch)
-            logger.info('Epoch: {:<2}/{:>2}    [Batch: {:>5}/{:>6.0f}]  Loss: {:>2.3f}'.format(
+            if write_to_tensorboard:
+                self.writer.add_scalar(tag='Loss/Training', scalar_value=loss, global_step=current_batch)
+            logger.info('Epoch: {:<2}/{:>2}    [Batch: {:>5}/{:>6.0f}]  Loss: {:>2.5f}'.format(
                         current_epoch, self.total_epochs, current_batch, self.total_batches, loss                                 
                             ))
     

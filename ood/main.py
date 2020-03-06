@@ -8,9 +8,10 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import torchvision
+import matplotlib.pyplot as plt
 
 from torch.utils.tensorboard import SummaryWriter
-
 from scipy.stats import moment
 from time import strftime
 from glob import glob
@@ -42,13 +43,11 @@ class Main(object):
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         
         if self.continue_run == 'last' and len(self.runs) != 0:
-            self.run_dir = join(self.runs_dir,self.runs[-1])
+            self.run_dir = self.runs[-1]
 
         if self.test_run =='last' and len(self.runs) != 0:
-            self.run_dir=join(self.runs_dir,self.runs[-1])
-
-
-
+            self.run_dir = self.runs[-1]
+        
     def __str__(self):
         return json.dumps(self.args.__dict__)
 
@@ -64,17 +63,17 @@ class Main(object):
 
     def load_weigths(self):
         if self.continue_run:
-            return torch.load(join(self.run_dir,'val_acc.pth'))
+            return torch.load(join(self.runs[-1],'val_acc.pth'))
         else:
             return torch.load(join(self.run_dir,'best_val_acc.pth'))
 
 
     def _get_inital_epoch(self):
         if self.continue_run:
-            with open(self.log_file, 'r') as file:
+            with open(join(self.run_dir,'training_log.csv'), 'r') as file:
                 reader = csv.reader(file)
                 row_count = sum(1 for row in reader)  
-            return row_count-1  # 1st row is header 
+            return row_count - 1  # 1st row is header 
         else:
             return 0
 
@@ -82,12 +81,15 @@ class Main(object):
         if self.continue_run and not self.run_dir:
             assert exists(self.continue_run), f'{self.continue_run} does not exist'
         else:
-            self.run_dir = join(self.runs_dir,self.timestamp + str(self.command))
-            os.makedirs(self.run_dir)
-
+            if not self.continue_run:
+                run_dir_name = '_'.join([self.timestamp, self.command, 'batch_size',str(self.batch_size),
+                                       'learning_rate',str(self.learning_rate),
+                                       'optim', str(self.optim),'loss', str(self.loss)])
+                self.run_dir = join(self.runs_dir, run_dir_name)
+                os.makedirs(self.run_dir)
         with open(join(self.run_dir,'command.txt'),'a+') as command:
-            command.write(repr(self) + '\n')
-            command.write(self.log_dir+ self.timestamp + repr( self))
+            command.write(str(self) + '\n')
+            command.write(f'{self.log_dir} {self.timestamp} {self}')
         
 
         self.log_file= join(self.run_dir,'training_log.txt')
@@ -98,7 +100,8 @@ class Main(object):
 
         with open(join(self.run_dir,'training_log.csv'), 'a+',  newline='') as file:
             writer=csv.writer(file,delimiter=',')
-            writer.writerow(('Epoch','Validation Loss', 'Validation Accuracy'))
+            if not self.continue_run:
+                writer.writerow(('Epoch','Validation Loss', 'Validation Accuracy'))
 
         
     def set_model_path(self, best=False):
@@ -136,6 +139,7 @@ class Main(object):
     def _calc_statistics(self, hook_dict, current_batch_size):
         statistics = {}
         num_features = 3
+        num_features = self.number_moments
         stats= np.empty((num_features, current_batch_size, 1))
         for layer_id, layer_hook in hook_dict.items():
             # [N,C,H,W]
@@ -235,7 +239,8 @@ class Main(object):
 
 
     def _train_2nd(self, model_1=None, model_2=None, data=None):
-        self._setup_run()
+        if not self.dry:
+            self._setup_run()
         
 
         if model_1 == None:
@@ -257,14 +262,19 @@ class Main(object):
         path_val_accuracy_model = join(self.run_dir,'val_acc.pth')
         
         if self.loss == 'L1':
-            criterion =nn.L1Loss(reduction='sum')
+            criterion =nn.L1Loss(reduction='mean')
         elif self.loss == 'MSE':
-            criterion = nn.MSELoss(reduction='sum')
+            criterion = nn.MSELoss(reduction='mean')
         elif self.loss == 'VAE':
             criterion = loss_function   #
-        optimizer = torch.optim.SGD(
-            model_2.parameters(), lr=self.learning_rate, momentum=1e-4)
-
+        
+        if self.optim == 'Adadelta':
+            optimizer = torch.optim.Adadelta(
+                model_2.parameters(), lr=self.learning_rate, weight_decay=1e-4)
+        elif self.optim == 'SGD':
+            optimizer = torch.optim.SGD(
+                model_2.parameters(), lr=self.learning_rate, momentum=1e-4)
+        
 
         batch_logger = BatchLogger(self.initial_epoch+self.epochs, np.ceil(data.train_set_size/self.batch_size), self.writer )
 
@@ -279,7 +289,7 @@ class Main(object):
         logger.info('Training second model')
         running_loss_best = 1e10
         for epoch in range(self.initial_epoch, self.initial_epoch+self.epochs):
-            for batch, train_data in enumerate(data.train_loader,0):
+            for batch, train_data in enumerate(data.train_loader, 0):
                 inputs, labels = train_data[0].to(self.device), train_data[1].to(self.device)
                 outputs = model_1(inputs.double())
                 ae_inputs = self._calc_statistics(activations, current_batch_size=outputs.shape[0])
@@ -339,8 +349,8 @@ class Main(object):
                     running_val_shifted_loss += val_shifted_loss
                     del ae_val_inputs
 
-            running_val_loss = running_val_loss.cpu().numpy()
-            running_val_shifted_loss = running_val_shifted_loss.cpu().numpy()
+            running_val_loss = int(running_val_loss.cpu().numpy()/data.val_set_size)
+            running_val_shifted_loss = int(running_val_shifted_loss.cpu().numpy()/data.val_set_size)
 
             # save model with lowest loss
             if running_val_loss < running_loss_best:
@@ -383,8 +393,9 @@ class Main(object):
         self._train_2nd(model_1=model_1, model_2=model_2, data=data)
 
     def train_ae_imagenet(self):
-        model_1 = vgg.get_model(**self.vgg_kwargs)
-        model_1.load_state_dict(torch.load(self.imagenet_weights, map_location=self.device))
+        model_1 = vgg.get_model(**self.vgg_kwargs, pretrained=True)
+        if self.imagenet_weights:
+            model_1.load_state_dict(torch.load(self.imagenet_weights, map_location=self.device))
 
         if self.model_2 == 'Variational':
             model_2 = VAE()
@@ -393,7 +404,16 @@ class Main(object):
         data = ImageNet(self.batch_size)
         self._train_2nd(model_1=model_1, model_2=model_2, data=data)
 
-        
+    def visualize_batch(self):
+        data = Cifar10(self.batch_size, data_dir=self.data_dir)
+        images, labels = next(iter(data.shifted_val_loader))
+        grid = torchvision.utils.make_grid(images)
+        writer = SummaryWriter(log_dir=join(self.log_dir, self.command))
+        writer.add_image(tag='Val Data + Uniform Noise', img_tensor=grid)
+
+
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('command', help='command(s) to run')
@@ -401,12 +421,12 @@ def main():
     parser.add_argument('--runs_dir', default='runs', help='Directory to save runs to')
     parser.add_argument('--data-dir', default='D:/Philipp/CIFAR/par/par/datasets', help='Directory of the data')
     parser.add_argument('--log-dir', default='logs', help='Log directory for tensorboard')
-
-
     parser.add_argument('-e','--epochs', default=1, type =int, help='Epochs to run')
     parser.add_argument('-b','--batch-size',default=64, type=int, help='Batchsize')
     parser.add_argument('-lr','--learning-rate',default=0.01, type=float, help='Learning rate')
-    
+    parser.add_argument('--dry', action='store_true', help='dry run, that does not create any folders')
+
+
     parser.add_argument('--model-path',default='model_pool/vgg16_bn_cifar10.pt', help=f'Path to model weights')
     parser.add_argument('--imagenet-weights', default='D:/Philipp/data/imagenet/imagenet', help=f'Path to ImageNet directory')
     parser.add_argument('--test-run', default='last', help='which run to test. '
@@ -414,10 +434,12 @@ def main():
     parser.add_argument('--continue-run',  nargs='?', default='', const='last',
                       help=f'continue a previous training run, given by the timestamp. '
                       f'If no run provided, continues the most recent.')
+    
 
-
+    parser.add_argument('--number-moments',default=5, help=f'how many moments to use')
     parser.add_argument('--model-2', default='Variational', choices=['Vanilla', 'Variational'])
     parser.add_argument('-l','--loss', default='L1', choices=['L1','MSE','VAE'], help='Loss function')
+    parser.add_argument('-o','--optim', default='Adadelta', choices=['SGD', 'Adadelta'], help='which optimzer to use')
     args = parser.parse_args()
     Main(args)()
 
