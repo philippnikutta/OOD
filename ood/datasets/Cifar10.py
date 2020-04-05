@@ -77,6 +77,8 @@ class Cifar10(object):
         self.shifted_test_loader = torch.utils.data.DataLoader(self.shifted_test_set, batch_size=self.batch_size,
                                                          shuffle=True, num_workers=4)
 
+    def __str__(self):
+        return 'Cifar10'
 
 class UniformNoise:
     """Add uniform noise to an image."""

@@ -2,6 +2,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
+logger.propagate = False # test for double output
 
 formatter = logging.Formatter('%(asctime)-19.19s %(levelname)-1.1s %(filename)s:%(lineno)s] %(message)s')
 

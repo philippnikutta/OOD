@@ -3,25 +3,32 @@ import torch
 import torch.nn as nn
 
 class AutoEncoder(nn.Module):
-    def __init__(self, input_dim):
+    def __init__(self, encoding_dim, input_dim):
         super().__init__()
-        self.encoding_dim = 2000
+        if encoding_dim == None:
+            self.encoding_dim = 500 
+        else:
+            self.encoding_dim = encoding_dim
         self.input_dim = input_dim
 
         self.encoder=nn.Sequential(
-            nn.Linear(self.input_dim,  self.encoding_dim * 2),
+            nn.Linear(self.input_dim,  self.encoding_dim * 4),
             nn.ReLU(inplace=True),
-            nn.Linear(self.encoding_dim * 2 ,self.encoding_dim),
+            nn.Linear(self.input_dim*4,  self.encoding_dim * 3),
             nn.ReLU(inplace=True),
-            nn.Linear(self.encoding_dim, int(self.encoding_dim / 2)),
+            nn.Linear(self.encoding_dim * 3 ,self.encoding_dim *2),
+            nn.ReLU(inplace=True),
+            nn.Linear(self.encoding_dim *2, self.encoding_dim),
             nn.ReLU(inplace=True)
         )
         self.decoder=nn.Sequential(
-            nn.Linear(int(self.encoding_dim / 2), self.encoding_dim),
+            nn.Linear(self.encoding_dim, self.encoding_dim*2),
             nn.ReLU(inplace=True),
-            nn.Linear(self.encoding_dim, self.encoding_dim * 2),
+            nn.Linear(self.input_dim*2,  self.encoding_dim * 3),
             nn.ReLU(inplace=True),
-            nn.Linear(self.encoding_dim * 2, self.input_dim),
+            nn.Linear(self.encoding_dim*3, self.encoding_dim * 4),
+            nn.ReLU(inplace=True),
+            nn.Linear(self.encoding_dim * 4, self.input_dim),
             nn.ReLU(inplace=True)
         )
 

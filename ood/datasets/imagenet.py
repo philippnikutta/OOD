@@ -42,7 +42,7 @@ class ImageNet(object):
             )
         
         self.train_loader = torch.utils.data.DataLoader(
-            train_set, batch_size=self.batch_size, shuffle=True,
+            self.train_set, batch_size=self.batch_size, shuffle=True,
             num_workers=self.workers, pin_memory=True)
 
 
